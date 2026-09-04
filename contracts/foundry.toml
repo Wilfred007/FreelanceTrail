@@ -9,9 +9,9 @@ optimizer_runs = 200
 [rpc_endpoints]
 arc_testnet = "https://rpc.testnet.arc.network"
 
-# ArcScan's verify-API compatibility is unconfirmed as of this scaffold; if `forge verify-contract`
-# fails against it, verify manually via the ArcScan UI instead.
-[etherscan]
-arc_testnet = { key = "${ARCSCAN_API_KEY}", url = "https://testnet.arcscan.app/api" }
+# ArcScan runs Blockscout, and Arc's chain ID (5042002) isn't in Foundry's built-in `--chain`
+# list, so the standard [etherscan] table doesn't resolve here (tested: Foundry 1.5.1 ignores
+# it even with an explicit `chain` field). Verify with the `blockscout` verifier instead — see
+# README.md for the full command.
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
