@@ -1,0 +1,87 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MilestoneStatus {
+  PENDING
+  FUNDED
+  SUBMITTED
+  APPROVED
+  REFUNDED
+}
+
+enum ProjectStatus {
+  DRAFT
+  ONCHAIN
+}
+
+model User {
+  id        String   @id @default(cuid())
+  walletAddress String @unique
+  githubUsername String?
+  createdAt DateTime @default(now())
+
+  clientProjects    Project[] @relation("ClientProjects")
+  developerProjects Project[] @relation("DeveloperProjects")
+  payments          Payment[]
+}
+
+model Project {
+  id            String        @id @default(cuid())
+  // Set once the createProject tx confirms on-chain; null while still a draft.
+  onchainId     BigInt?       @unique
+  status        ProjectStatus @default(DRAFT)
+  metadataURI   String        @unique
+
+  title         String
+  description   String?
+
+  client        User   @relation("ClientProjects", fields: [clientId], references: [id])
+  clientId      String
+  developer     User   @relation("DeveloperProjects", fields: [developerId], references: [id])
+  developerId   String
+
+  milestones    Milestone[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Milestone {
+  id              String          @id @default(cuid())
+  project         Project         @relation(fields: [projectId], references: [id])
+  projectId       String
+  // Index within the project's on-chain milestoneAmounts array.
+  index           Int
+  description     String?
+  amount          Decimal         @db.Decimal(18, 6)
+  status          MilestoneStatus @default(PENDING)
+  proofURI        String?
+
+  payment         Payment?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([projectId, index])
+}
+
+model Payment {
+  id            String    @id @default(cuid())
+  milestone     Milestone @relation(fields: [milestoneId], references: [id])
+  milestoneId   String    @unique
+  developer     User      @relation(fields: [developerId], references: [id])
+  developerId   String
+  amount        Decimal   @db.Decimal(18, 6)
+  txHash        String    @unique
+  blockNumber   BigInt
+  releasedAt    DateTime  @default(now())
+}
