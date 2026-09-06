@@ -22,24 +22,28 @@ export class ChainListenerService implements OnModuleInit {
   }
 
   // Arc's public RPC rejects eth_getLogs over a wide block range ("requested range too
-  // large"), so we page through history in fixed-size chunks instead of one wide query.
+  // large") and rate-limits bursts of requests, so we page through history in fixed-size
+  // chunks with a delay between them instead of firing one wide (or rapid-fire) query.
   private async backfill() {
     const deployBlock = process.env.ESCROW_DEPLOY_BLOCK
       ? BigInt(process.env.ESCROW_DEPLOY_BLOCK)
       : 0n;
     const latestBlock = await this.chain.client.getBlockNumber();
     const chunkSize = 2000n;
+    const requestDelayMs = 500;
 
     let processed = 0;
     for (let from = deployBlock; from <= latestBlock; from += chunkSize) {
       const to = from + chunkSize - 1n > latestBlock ? latestBlock : from + chunkSize - 1n;
 
-      const logs = await this.chain.client.getContractEvents({
-        address: this.chain.escrowAddress,
-        abi: this.chain.escrowAbi,
-        fromBlock: from,
-        toBlock: to,
-      });
+      const logs = await this.withRetry(() =>
+        this.chain.client.getContractEvents({
+          address: this.chain.escrowAddress,
+          abi: this.chain.escrowAbi,
+          fromBlock: from,
+          toBlock: to,
+        }),
+      );
 
       const sorted = [...logs].sort((a, b) => {
         if (a.blockNumber !== b.blockNumber) return a.blockNumber! < b.blockNumber! ? -1 : 1;
@@ -50,9 +54,33 @@ export class ChainListenerService implements OnModuleInit {
         await this.handleLog(log);
         processed++;
       }
+
+      if (to < latestBlock) {
+        await new Promise((resolve) => setTimeout(resolve, requestDelayMs));
+      }
     }
 
     this.logger.log(`Backfilled ${processed} escrow event(s) from block ${deployBlock} to ${latestBlock}`);
+  }
+
+  // Arc's public RPC rate limit is bursty enough that even a spaced-out backfill can
+  // trip it occasionally; retry with growing backoff rather than aborting the whole
+  // backfill (and silently skipping every block after the failed chunk) on one blip.
+  private async withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        const backoffMs = 1000 * 2 ** attempt;
+        this.logger.warn(
+          `Request failed (attempt ${attempt + 1}/${attempts}), retrying in ${backoffMs}ms: ${(err as Error).message}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+    throw lastError;
   }
 
   private watch() {

@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ChainModule } from './chain/chain.module';
 import { ProjectsModule } from './projects/projects.module';
 import { GithubModule } from './github/github.module';
+import { DevelopersModule } from './developers/developers.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { GithubModule } from './github/github.module';
     ChainModule,
     ProjectsModule,
     GithubModule,
+    DevelopersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

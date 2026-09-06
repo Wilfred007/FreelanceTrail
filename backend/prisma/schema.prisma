@@ -57,6 +57,19 @@ model GithubContribution {
   @@unique([repository, prNumber])
 }
 
+// Repo-level GitHub traction, keyed by "owner/name" — not tied to a single developer,
+// since multiple contributors can share a repository. Refreshed opportunistically
+// whenever a GitHub contribution sync touches that repo.
+model RepoImpact {
+  id           String   @id @default(cuid())
+  repository   String   @unique
+  stars        Int
+  forks        Int
+  openIssues   Int
+  contributors Int?
+  fetchedAt    DateTime @default(now())
+}
+
 model Project {
   id            String        @id @default(cuid())
   // Set once the createProject tx confirms on-chain; null while still a draft.

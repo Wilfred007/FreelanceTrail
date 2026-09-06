@@ -109,7 +109,7 @@ export class GithubService {
 
       const [{ data: pr }, language] = await Promise.all([
         octokit.rest.pulls.get({ owner, repo, pull_number: item.number }),
-        this.getRepoLanguage(octokit, repoLanguageCache, owner, repo),
+        this.syncRepoImpact(octokit, repoLanguageCache, owner, repo),
       ]);
 
       await this.prisma.githubContribution.upsert({
@@ -145,7 +145,10 @@ export class GithubService {
     });
   }
 
-  private async getRepoLanguage(
+  // Fetches repo-level impact (stars/forks/open issues/contributors) once per repo per
+  // sync, upserts it into RepoImpact, and returns the repo's primary language for the
+  // contribution record — reusing the same repos.get() call for both purposes.
+  private async syncRepoImpact(
     octokit: Octokit,
     cache: Map<string, string | null>,
     owner: string,
@@ -154,8 +157,54 @@ export class GithubService {
     const key = `${owner}/${repo}`;
     if (cache.has(key)) return cache.get(key)!;
 
-    const { data } = await octokit.rest.repos.get({ owner, repo });
-    cache.set(key, data.language);
-    return data.language;
+    const [{ data: repoData }, contributors] = await Promise.all([
+      octokit.rest.repos.get({ owner, repo }),
+      this.getContributorCount(octokit, owner, repo),
+    ]);
+
+    await this.prisma.repoImpact.upsert({
+      where: { repository: key },
+      update: {
+        stars: repoData.stargazers_count,
+        forks: repoData.forks_count,
+        openIssues: repoData.open_issues_count,
+        contributors,
+      },
+      create: {
+        repository: key,
+        stars: repoData.stargazers_count,
+        forks: repoData.forks_count,
+        openIssues: repoData.open_issues_count,
+        contributors,
+      },
+    });
+
+    cache.set(key, repoData.language);
+    return repoData.language;
+  }
+
+  // GitHub doesn't expose a total-contributors count directly; the documented trick is
+  // to request 1 result per page and read the last page number off the Link header.
+  private async getContributorCount(
+    octokit: Octokit,
+    owner: string,
+    repo: string,
+  ): Promise<number | null> {
+    try {
+      const response = await octokit.rest.repos.listContributors({
+        owner,
+        repo,
+        per_page: 1,
+        anon: '1',
+      });
+      const link = response.headers.link;
+      if (!link) return response.data.length;
+
+      const match = link.match(/[?&]page=(\d+)>;\s*rel="last"/);
+      return match ? Number(match[1]) : response.data.length;
+    } catch (err) {
+      this.logger.warn(`Failed to fetch contributor count for ${owner}/${repo}: ${(err as Error).message}`);
+      return null;
+    }
   }
 }

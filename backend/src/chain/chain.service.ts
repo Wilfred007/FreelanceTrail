@@ -22,6 +22,9 @@ export class ChainService implements OnModuleInit {
     this.client = createPublicClient({
       chain: arcTestnet,
       transport: http(rpcUrl),
+      // Arc's public RPC rate-limits eth_getLogs aggressively; viem's 4s default
+      // polling interval for watchContractEvent trips it almost immediately.
+      pollingInterval: Number(process.env.ARC_POLLING_INTERVAL_MS ?? 20_000),
     });
   }
 
