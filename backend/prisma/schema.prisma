@@ -27,11 +27,34 @@ model User {
   id        String   @id @default(cuid())
   walletAddress String @unique
   githubUsername String?
+  // TODO: encrypt at rest before production; fine for hackathon MVP, scoped to read:user only.
+  githubAccessToken String?
   createdAt DateTime @default(now())
 
-  clientProjects    Project[] @relation("ClientProjects")
-  developerProjects Project[] @relation("DeveloperProjects")
-  payments          Payment[]
+  clientProjects      Project[]            @relation("ClientProjects")
+  developerProjects   Project[]            @relation("DeveloperProjects")
+  payments            Payment[]
+  githubContributions GithubContribution[]
+}
+
+model GithubContribution {
+  id           String    @id @default(cuid())
+  user         User      @relation(fields: [userId], references: [id])
+  userId       String
+  repository   String
+  prNumber     Int
+  title        String
+  status       String
+  url          String
+  createdAt    DateTime
+  mergedAt     DateTime?
+  filesChanged Int
+  additions    Int
+  deletions    Int
+  language     String?
+  fetchedAt    DateTime  @default(now())
+
+  @@unique([repository, prNumber])
 }
 
 model Project {
