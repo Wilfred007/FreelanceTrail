@@ -35,6 +35,12 @@ model User {
   developerProjects   Project[]            @relation("DeveloperProjects")
   payments            Payment[]
   githubContributions GithubContribution[]
+
+  // AI Reputation Analyst output — null until generated via POST /developers/:id/reputation.
+  reputationTopAreas   String[]  @default([])
+  reputationStrengths  String[]  @default([])
+  reputationSummary    String?
+  reputationGeneratedAt DateTime?
 }
 
 model GithubContribution {

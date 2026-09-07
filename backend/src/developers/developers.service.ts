@@ -77,6 +77,15 @@ export class DevelopersService {
       projectImpact,
       recentContributions,
       recentPayments,
+      // AI Reputation Analyst output — null until POST /developers/:id/reputation runs.
+      reputation: user.reputationGeneratedAt
+        ? {
+            topAreas: user.reputationTopAreas,
+            strengths: user.reputationStrengths,
+            summary: user.reputationSummary,
+            generatedAt: user.reputationGeneratedAt,
+          }
+        : null,
     };
   }
 }
