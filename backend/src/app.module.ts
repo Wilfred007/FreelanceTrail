@@ -7,6 +7,7 @@ import { ChainModule } from './chain/chain.module';
 import { ProjectsModule } from './projects/projects.module';
 import { GithubModule } from './github/github.module';
 import { DevelopersModule } from './developers/developers.module';
+import { MatchingModule } from './matching/matching.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { DevelopersModule } from './developers/developers.module';
     ProjectsModule,
     GithubModule,
     DevelopersModule,
+    MatchingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
