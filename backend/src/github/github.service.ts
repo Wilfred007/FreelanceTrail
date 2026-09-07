@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Octokit } from '@octokit/rest';
 import { PrismaService } from '../prisma/prisma.service';
 import { OAuthStateStore } from './oauth-state.store';
+import { ContributionAnalyzerService } from '../ai/contribution-analyzer.service';
 
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
@@ -17,6 +18,7 @@ export class GithubService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateStore: OAuthStateStore,
+    private readonly contributionAnalyzer: ContributionAnalyzerService,
   ) {}
 
   getAuthorizeUrl(userId: string): string {
@@ -112,7 +114,7 @@ export class GithubService {
         this.syncRepoImpact(octokit, repoLanguageCache, owner, repo),
       ]);
 
-      await this.prisma.githubContribution.upsert({
+      const contribution = await this.prisma.githubContribution.upsert({
         where: { repository_prNumber: { repository, prNumber: item.number } },
         update: {
           title: pr.title,
@@ -137,6 +139,34 @@ export class GithubService {
           language,
         },
       });
+
+      // Analysis is best-effort and only runs once per contribution — re-syncing an
+      // already-analyzed PR (e.g. a stale merge date refresh) shouldn't re-spend an
+      // inference call.
+      if (!contribution.analyzedAt) {
+        const analysis = await this.contributionAnalyzer.analyze({
+          repository,
+          title: pr.title,
+          language,
+          filesChanged: pr.changed_files,
+          additions: pr.additions,
+          deletions: pr.deletions,
+        });
+
+        if (analysis) {
+          await this.prisma.githubContribution.update({
+            where: { id: contribution.id },
+            data: {
+              aiCategory: analysis.category,
+              aiSkills: analysis.skills,
+              aiComplexity: analysis.complexity,
+              aiImpact: analysis.impact,
+              aiSummary: analysis.summary,
+              analyzedAt: new Date(),
+            },
+          });
+        }
+      }
     }
 
     return this.prisma.githubContribution.findMany({

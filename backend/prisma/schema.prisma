@@ -54,6 +54,14 @@ model GithubContribution {
   language     String?
   fetchedAt    DateTime  @default(now())
 
+  // AI Contribution Analyzer output — null until analyzed.
+  aiCategory   String?
+  aiSkills     String[]  @default([])
+  aiComplexity String?
+  aiImpact     String?
+  aiSummary    String?
+  analyzedAt   DateTime?
+
   @@unique([repository, prNumber])
 }
 

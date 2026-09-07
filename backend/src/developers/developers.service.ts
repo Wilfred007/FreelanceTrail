@@ -26,13 +26,18 @@ export class DevelopersService {
       .reduce((sum, p) => sum + Number(p.amount), 0)
       .toFixed(6);
 
-    const languageCounts = new Map<string, number>();
+    // AI Contribution Analyzer skills, aggregated by frequency across all analyzed
+    // contributions. Falls back to a naive per-language count for contributions that
+    // haven't been analyzed yet (e.g. analysis failed or is still pending).
+    const skillCounts = new Map<string, number>();
     for (const c of user.githubContributions) {
-      if (!c.language) continue;
-      languageCounts.set(c.language, (languageCounts.get(c.language) ?? 0) + 1);
+      const skillSources = c.aiSkills.length ? c.aiSkills : c.language ? [c.language] : [];
+      for (const skill of skillSources) {
+        skillCounts.set(skill, (skillCounts.get(skill) ?? 0) + 1);
+      }
     }
-    const skills = [...languageCounts.entries()]
-      .map(([language, count]) => ({ language, count }))
+    const skills = [...skillCounts.entries()]
+      .map(([skill, count]) => ({ skill, count }))
       .sort((a, b) => b.count - a.count);
 
     const repositories = [...new Set(user.githubContributions.map((c) => c.repository))];
@@ -68,8 +73,6 @@ export class DevelopersService {
       projects: user.developerProjects.length,
       contributions: user.githubContributions.length,
       verifiedPayments: user.payments.length,
-      // Stands in for Feature 5's AI-derived skills until the Reputation Analyst
-      // agent exists — a naive frequency count over contributed languages.
       skills,
       projectImpact,
       recentContributions,
