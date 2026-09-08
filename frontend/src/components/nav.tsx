@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useConnection, useConnect, useConnectors, useDisconnect } from 'wagmi';
+import { arcTestnet } from '@/lib/chain';
 
 function short(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -38,7 +39,7 @@ export function Nav() {
             </button>
           ) : (
             <button
-              onClick={() => connect({ connector: connectors[0] })}
+              onClick={() => connect({ connector: connectors[0], chainId: arcTestnet.id })}
               disabled={isPending}
               className="rounded-full bg-linear-to-r from-accent to-accent-2 px-4 py-1.5 text-xs font-medium text-black shadow-[0_0_20px_-4px_var(--accent)] transition hover:opacity-90 disabled:opacity-50"
             >

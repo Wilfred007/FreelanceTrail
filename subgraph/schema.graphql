@@ -1,0 +1,70 @@
+"""
+One immutable entity per raw contract event, deliberately un-normalized — no
+cross-entity logic lives here. The backend replays these (ordered by blockNumber then
+logIndex) through its existing event handlers to build actual Project/Milestone/Payment
+state in Postgres. This subgraph exists purely to get events out of Arc Testnet without
+hitting its rate-limited public RPC directly.
+"""
+
+type ProjectCreatedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  client: Bytes!
+  developer: Bytes!
+  metadataURI: String!
+  milestoneAmounts: [BigInt!]!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}
+
+type MilestoneFundedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  milestoneIndex: BigInt!
+  amount: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}
+
+type MilestoneSubmittedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  milestoneIndex: BigInt!
+  proofURI: String!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}
+
+type MilestoneApprovedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  milestoneIndex: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}
+
+type PaymentReleasedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  milestoneIndex: BigInt!
+  developer: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}
+
+type RefundIssuedEvent @entity(immutable: true) {
+  id: Bytes!
+  projectId: BigInt!
+  milestoneIndex: BigInt!
+  client: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  logIndex: BigInt!
+}

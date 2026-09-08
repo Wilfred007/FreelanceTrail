@@ -81,7 +81,12 @@ export class ProjectsService {
         developer: { select: { id: true, walletAddress: true, githubUsername: true } },
         milestones: {
           orderBy: { index: 'asc' },
-          include: { payment: true },
+          include: {
+            payment: true,
+            contribution: {
+              select: { id: true, repository: true, prNumber: true, title: true, url: true, aiSummary: true },
+            },
+          },
         },
       },
     });

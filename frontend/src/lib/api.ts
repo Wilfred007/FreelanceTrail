@@ -51,6 +51,15 @@ export interface Payment {
   releasedAt: string;
 }
 
+export interface VerifiedProof {
+  id: string;
+  repository: string;
+  prNumber: number;
+  title: string;
+  url: string;
+  aiSummary: string | null;
+}
+
 export interface Milestone {
   id: string;
   projectId: string;
@@ -59,6 +68,7 @@ export interface Milestone {
   amount: string;
   status: 'PENDING' | 'FUNDED' | 'SUBMITTED' | 'APPROVED' | 'REFUNDED';
   proofURI: string | null;
+  contribution?: VerifiedProof | null;
   payment?: Payment | null;
   createdAt: string;
   updatedAt: string;
@@ -119,6 +129,9 @@ export const api = {
 
   syncGithubContributions: (userId: string) =>
     request<GithubContribution[]>(`/github/contributions?userId=${userId}`),
+
+  getVerifiableContributions: (developerId: string) =>
+    request<GithubContribution[]>(`/developers/${developerId}/contributions`),
 
   listProjects: () => request<Project[]>('/projects'),
 

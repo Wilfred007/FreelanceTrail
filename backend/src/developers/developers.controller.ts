@@ -22,6 +22,11 @@ export class DevelopersController {
     return this.developersService.getPassport(id);
   }
 
+  @Get(':id/contributions')
+  getVerifiableContributions(@Param('id') id: string) {
+    return this.developersService.getVerifiableContributions(id);
+  }
+
   @Post(':id/reputation')
   generateReputation(@Param('id') id: string) {
     return this.reputationAnalyst.generate(id);

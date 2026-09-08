@@ -16,6 +16,16 @@ export class DevelopersService {
     return user;
   }
 
+  // Merged contributions a developer can pick from as milestone proof — matches exactly
+  // what ChainListenerService.onMilestoneSubmitted checks against, so anything offered
+  // here will actually verify once submitted on-chain.
+  async getVerifiableContributions(id: string) {
+    return this.prisma.githubContribution.findMany({
+      where: { userId: id, status: 'MERGED' },
+      orderBy: { mergedAt: 'desc' },
+    });
+  }
+
   async getPassport(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },

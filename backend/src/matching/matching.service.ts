@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { matchFreelancers, type CandidateEvidence } from '../ai/matching.agent';
+import { matchFreelancers, type CandidateEvidence, type MatchingResult } from '../ai/matching.agent';
 
 @Injectable()
 export class MatchingService {
+  private readonly logger = new Logger(MatchingService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async match(requirement: string) {
@@ -41,7 +43,18 @@ export class MatchingService {
       };
     });
 
-    const result = await matchFreelancers({ requirement, candidates });
+    let result: MatchingResult;
+    try {
+      result = await matchFreelancers({ requirement, candidates });
+    } catch (err) {
+      // Unlike the Contribution Analyzer (best-effort, runs unattended during sync),
+      // this is a direct user-initiated request — surface a clear, actionable error
+      // instead of letting an inference timeout/hiccup bubble up as a bare 500.
+      this.logger.warn(`Matching failed: ${(err as Error).message}`);
+      throw new ServiceUnavailableException(
+        'Developer matching is temporarily unavailable — please try again in a moment.',
+      );
+    }
 
     const byId = new Map(users.map((u) => [u.id, u]));
     return {

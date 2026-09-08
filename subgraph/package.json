@@ -1,0 +1,16 @@
+{
+  "name": "freelancetrail-subgraph",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "graph deploy"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-ts": "0.38.2"
+  },
+  "devDependencies": {
+    "@graphprotocol/graph-cli": "0.98.1"
+  }
+}

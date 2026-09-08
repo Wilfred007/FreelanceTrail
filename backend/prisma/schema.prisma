@@ -68,6 +68,9 @@ model GithubContribution {
   aiSummary    String?
   analyzedAt   DateTime?
 
+  // Milestones whose submitted proofURI matched this contribution's URL.
+  verifiedForMilestones Milestone[]
+
   @@unique([repository, prNumber])
 }
 
@@ -116,6 +119,13 @@ model Milestone {
   status          MilestoneStatus @default(PENDING)
   proofURI        String?
 
+  // Set by the chain listener when proofURI matches a merged GithubContribution
+  // belonging to this project's developer — the client's actual grounds to trust the
+  // submission instead of taking the proof string on faith. Null means unverified
+  // (proof text didn't match any of the developer's verified contributions).
+  contribution    GithubContribution? @relation(fields: [contributionId], references: [id])
+  contributionId  String?
+
   payment         Payment?
 
   createdAt       DateTime @default(now())
@@ -134,4 +144,12 @@ model Payment {
   txHash        String    @unique
   blockNumber   BigInt
   releasedAt    DateTime  @default(now())
+}
+
+// Single-row table tracking how far ChainListenerService has synced from the subgraph
+// (by block number), so a restart resumes from there instead of re-fetching everything.
+model SyncCursor {
+  id        String   @id
+  lastBlock BigInt
+  updatedAt DateTime @updatedAt
 }

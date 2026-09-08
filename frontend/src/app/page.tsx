@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useConnection, useConnect, useConnectors } from 'wagmi';
+import { arcTestnet } from '@/lib/chain';
 
 export default function Home() {
   const { isConnected } = useConnection();
@@ -18,7 +19,7 @@ export default function Home() {
 
       {!isConnected ? (
         <button
-          onClick={() => connect({ connector: connectors[0] })}
+          onClick={() => connect({ connector: connectors[0], chainId: arcTestnet.id })}
           disabled={isPending}
           className="rounded-full bg-linear-to-r from-accent to-accent-2 px-6 py-3 font-medium text-black shadow-[0_0_30px_-6px_var(--accent)] transition hover:opacity-90 disabled:opacity-50"
         >

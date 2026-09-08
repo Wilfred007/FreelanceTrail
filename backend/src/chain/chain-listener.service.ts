@@ -1,130 +1,207 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ChainService } from './chain.service';
 import { baseUnitsToDecimalString } from './usdc.util';
+
+// Single fixed row id for the one-row sync-progress table — see SyncCursor in
+// schema.prisma. Using a constant string avoids a second lookup query just to find it.
+const CURSOR_ID = 'escrow';
+
+interface RawEvent {
+  eventName: string;
+  blockNumber: bigint;
+  logIndex: number;
+  transactionHash: string;
+  args: Record<string, unknown>;
+}
 
 @Injectable()
 export class ChainListenerService implements OnModuleInit {
   private readonly logger = new Logger(ChainListenerService.name);
 
-  constructor(
-    private readonly chain: ChainService,
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
+  // Previously this class polled Arc Testnet's RPC directly (getContractEvents for
+  // history, watchContractEvent for new events), which hit Arc's public RPC rate limit
+  // constantly and re-scanned the entire history from ESCROW_DEPLOY_BLOCK on every
+  // restart (that range only grows over time). Now it polls a subgraph via GraphQL
+  // instead — The Graph's own infrastructure does the chain-scanning, and a persisted
+  // cursor (SyncCursor) means a restart resumes instantly rather than re-scanning.
   onModuleInit() {
-    // Start watching for new events immediately rather than waiting on backfill — the
-    // deploy-block-to-now range only grows over time and gets slower/more rate-limited
-    // on every restart, which was delaying live event pickup (a transaction made right
-    // after startup wouldn't be seen until the entire historical replay finished, which
-    // could take minutes). The two run concurrently now; event handlers are all upserts,
-    // so any overlap between backfill's tail and watch's start is harmless.
-    this.watch();
-    this.backfill().catch((err) => {
-      this.logger.error('Backfill failed; live watch is still running', err as Error);
-    });
-  }
-
-  // Arc's public RPC rejects eth_getLogs over a wide block range ("requested range too
-  // large") and rate-limits bursts of requests, so we page through history in fixed-size
-  // chunks with a delay between them instead of firing one wide (or rapid-fire) query.
-  private async backfill() {
-    const deployBlock = process.env.ESCROW_DEPLOY_BLOCK
-      ? BigInt(process.env.ESCROW_DEPLOY_BLOCK)
-      : 0n;
-    const latestBlock = await this.chain.client.getBlockNumber();
-    const chunkSize = 2000n;
-    const requestDelayMs = 500;
-
-    let processed = 0;
-    for (let from = deployBlock; from <= latestBlock; from += chunkSize) {
-      const to = from + chunkSize - 1n > latestBlock ? latestBlock : from + chunkSize - 1n;
-
-      const logs = await this.withRetry(() =>
-        this.chain.client.getContractEvents({
-          address: this.chain.escrowAddress,
-          abi: this.chain.escrowAbi,
-          fromBlock: from,
-          toBlock: to,
-        }),
+    if (!process.env.GRAPH_API_URL) {
+      this.logger.error(
+        'GRAPH_API_URL is not set — on-chain event sync is disabled until the subgraph ' +
+          'is deployed and its query URL is configured. See subgraph/README.md.',
       );
-
-      const sorted = [...logs].sort((a, b) => {
-        if (a.blockNumber !== b.blockNumber) return a.blockNumber! < b.blockNumber! ? -1 : 1;
-        return (a.logIndex ?? 0) - (b.logIndex ?? 0);
-      });
-
-      for (const log of sorted) {
-        await this.handleLog(log);
-        processed++;
-      }
-
-      if (to < latestBlock) {
-        await new Promise((resolve) => setTimeout(resolve, requestDelayMs));
-      }
+      return;
     }
 
-    this.logger.log(`Backfilled ${processed} escrow event(s) from block ${deployBlock} to ${latestBlock}`);
+    const intervalMs = Number(process.env.GRAPH_POLL_INTERVAL_MS ?? 15_000);
+    this.poll().catch((err) => this.logger.error('Initial subgraph sync failed', err as Error));
+    setInterval(() => {
+      this.poll().catch((err) => this.logger.error('Subgraph poll failed', err as Error));
+    }, intervalMs);
+
+    this.logger.log(`Polling subgraph for FreelanceEscrow events every ${intervalMs}ms`);
   }
 
-  // Arc's public RPC rate limit is bursty enough that even a spaced-out backfill can
-  // trip it occasionally; retry with growing backoff rather than aborting the whole
-  // backfill (and silently skipping every block after the failed chunk) on one blip.
-  private async withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < attempts; attempt++) {
+  private async getCursor(): Promise<bigint> {
+    const row = await this.prisma.syncCursor.findUnique({ where: { id: CURSOR_ID } });
+    return row?.lastBlock ?? 0n;
+  }
+
+  private async setCursor(lastBlock: bigint) {
+    await this.prisma.syncCursor.upsert({
+      where: { id: CURSOR_ID },
+      update: { lastBlock },
+      create: { id: CURSOR_ID, lastBlock },
+    });
+  }
+
+  private async poll() {
+    const cursor = await this.getCursor();
+    const events = await this.fetchEvents(cursor);
+    if (events.length === 0) return;
+
+    events.sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
+
+    for (const event of events) {
       try {
-        return await fn();
+        await this.handleEvent(event);
       } catch (err) {
-        lastError = err;
-        const backoffMs = 1000 * 2 ** attempt;
-        this.logger.warn(
-          `Request failed (attempt ${attempt + 1}/${attempts}), retrying in ${backoffMs}ms: ${(err as Error).message}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        this.logger.error(`Failed to process ${event.eventName} at ${event.transactionHash}`, err as Error);
       }
     }
-    throw lastError;
+
+    const maxBlock = events[events.length - 1].blockNumber;
+    await this.setCursor(maxBlock);
+    this.logger.log(`Synced ${events.length} escrow event(s) up to block ${maxBlock}`);
   }
 
-  private watch() {
-    this.chain.client.watchContractEvent({
-      address: this.chain.escrowAddress,
-      abi: this.chain.escrowAbi,
-      onLogs: async (logs) => {
-        for (const log of logs) {
-          try {
-            await this.handleLog(log);
-          } catch (err) {
-            this.logger.error(
-              `Failed to process ${(log as any).eventName} at ${log.transactionHash}`,
-              err as Error,
-            );
-          }
+  // One combined query covers all six event types per poll. `first: 1000` is far more
+  // than this app will ever produce between 15s polls; add pagination here if that
+  // ever stops being true.
+  private async fetchEvents(cursor: bigint): Promise<RawEvent[]> {
+    const query = `
+      query Events($cursor: BigInt!) {
+        projectCreatedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId client developer metadataURI milestoneAmounts blockNumber transactionHash logIndex
         }
-      },
-      onError: (error) => {
-        this.logger.error('watchContractEvent error', error);
-      },
+        milestoneFundedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId milestoneIndex amount blockNumber transactionHash logIndex
+        }
+        milestoneSubmittedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId milestoneIndex proofURI blockNumber transactionHash logIndex
+        }
+        milestoneApprovedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId milestoneIndex blockNumber transactionHash logIndex
+        }
+        paymentReleasedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId milestoneIndex developer amount blockNumber transactionHash logIndex
+        }
+        refundIssuedEvents(where: { blockNumber_gt: $cursor }, orderBy: blockNumber, orderDirection: asc, first: 1000) {
+          projectId milestoneIndex client amount blockNumber transactionHash logIndex
+        }
+      }
+    `;
+
+    const res = await fetch(process.env.GRAPH_API_URL!, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables: { cursor: cursor.toString() } }),
     });
 
-    this.logger.log('Watching FreelanceEscrow for new events');
+    if (!res.ok) {
+      throw new Error(`Subgraph query failed: ${res.status} ${res.statusText}`);
+    }
+    const body = (await res.json()) as { data?: Record<string, unknown[]>; errors?: { message: string }[] };
+    if (body.errors?.length) {
+      throw new Error(`Subgraph query returned errors: ${body.errors.map((e) => e.message).join('; ')}`);
+    }
+    const data = body.data ?? {};
+
+    const events: RawEvent[] = [];
+    const common = (e: any) => ({
+      blockNumber: BigInt(e.blockNumber),
+      logIndex: Number(e.logIndex),
+      transactionHash: e.transactionHash,
+    });
+
+    for (const e of (data.projectCreatedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'ProjectCreated',
+        ...common(e),
+        args: {
+          projectId: BigInt(e.projectId),
+          client: e.client,
+          developer: e.developer,
+          metadataURI: e.metadataURI,
+          milestoneAmounts: (e.milestoneAmounts as string[]).map((a) => BigInt(a)),
+        },
+      });
+    }
+    for (const e of (data.milestoneFundedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'MilestoneFunded',
+        ...common(e),
+        args: { projectId: BigInt(e.projectId), milestoneIndex: BigInt(e.milestoneIndex), amount: BigInt(e.amount) },
+      });
+    }
+    for (const e of (data.milestoneSubmittedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'MilestoneSubmitted',
+        ...common(e),
+        args: { projectId: BigInt(e.projectId), milestoneIndex: BigInt(e.milestoneIndex), proofURI: e.proofURI },
+      });
+    }
+    for (const e of (data.milestoneApprovedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'MilestoneApproved',
+        ...common(e),
+        args: { projectId: BigInt(e.projectId), milestoneIndex: BigInt(e.milestoneIndex) },
+      });
+    }
+    for (const e of (data.paymentReleasedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'PaymentReleased',
+        ...common(e),
+        args: {
+          projectId: BigInt(e.projectId),
+          milestoneIndex: BigInt(e.milestoneIndex),
+          developer: e.developer,
+          amount: BigInt(e.amount),
+        },
+      });
+    }
+    for (const e of (data.refundIssuedEvents ?? []) as any[]) {
+      events.push({
+        eventName: 'RefundIssued',
+        ...common(e),
+        args: {
+          projectId: BigInt(e.projectId),
+          milestoneIndex: BigInt(e.milestoneIndex),
+          client: e.client,
+          amount: BigInt(e.amount),
+        },
+      });
+    }
+
+    return events;
   }
 
-  private async handleLog(log: any) {
-    switch (log.eventName) {
+  private async handleEvent(event: RawEvent) {
+    switch (event.eventName) {
       case 'ProjectCreated':
-        return this.onProjectCreated(log);
+        return this.onProjectCreated(event);
       case 'MilestoneFunded':
-        return this.onMilestoneFunded(log);
+        return this.onMilestoneFunded(event);
       case 'MilestoneSubmitted':
-        return this.onMilestoneSubmitted(log);
+        return this.onMilestoneSubmitted(event);
       case 'MilestoneApproved':
-        return this.onMilestoneApproved(log);
+        return this.onMilestoneApproved(event);
       case 'PaymentReleased':
-        return this.onPaymentReleased(log);
+        return this.onPaymentReleased(event);
       case 'RefundIssued':
-        return this.onRefundIssued(log);
+        return this.onRefundIssued(event);
     }
   }
 
@@ -150,8 +227,14 @@ export class ChainListenerService implements OnModuleInit {
     });
   }
 
-  private async onProjectCreated(log: any) {
-    const { projectId, client, developer, metadataURI, milestoneAmounts } = log.args;
+  private async onProjectCreated(event: RawEvent) {
+    const { projectId, client, developer, metadataURI, milestoneAmounts } = event.args as {
+      projectId: bigint;
+      client: string;
+      developer: string;
+      metadataURI: string;
+      milestoneAmounts: bigint[];
+    };
 
     const [clientUser, developerUser] = await Promise.all([
       this.upsertUser(client),
@@ -172,7 +255,7 @@ export class ChainListenerService implements OnModuleInit {
     });
 
     await Promise.all(
-      (milestoneAmounts as bigint[]).map((amount, index) =>
+      milestoneAmounts.map((amount, index) =>
         this.prisma.milestone.upsert({
           where: { projectId_index: { projectId: project.id, index } },
           update: {},
@@ -189,32 +272,61 @@ export class ChainListenerService implements OnModuleInit {
     this.logger.log(`ProjectCreated on-chain #${projectId} -> ${project.id}`);
   }
 
-  private async onMilestoneFunded(log: any) {
-    const { projectId, milestoneIndex } = log.args;
+  private async onMilestoneFunded(event: RawEvent) {
+    const { projectId, milestoneIndex } = event.args as { projectId: bigint; milestoneIndex: bigint };
     const milestone = await this.findMilestone(projectId, Number(milestoneIndex));
     if (!milestone) return;
     await this.prisma.milestone.update({ where: { id: milestone.id }, data: { status: 'FUNDED' } });
   }
 
-  private async onMilestoneSubmitted(log: any) {
-    const { projectId, milestoneIndex, proofURI } = log.args;
+  private async onMilestoneSubmitted(event: RawEvent) {
+    const { projectId, milestoneIndex, proofURI } = event.args as {
+      projectId: bigint;
+      milestoneIndex: bigint;
+      proofURI: string;
+    };
     const milestone = await this.findMilestone(projectId, Number(milestoneIndex));
     if (!milestone) return;
+
+    // Proof is "verified" when proofURI matches a merged GithubContribution actually
+    // belonging to this project's developer — not just any contribution with that URL,
+    // so a developer can't claim credit for someone else's merged PR.
+    const project = await this.prisma.project.findUnique({
+      where: { onchainId: projectId },
+      select: { developerId: true },
+    });
+    const contribution = project
+      ? await this.prisma.githubContribution.findFirst({
+          where: { url: proofURI, userId: project.developerId, status: 'MERGED' },
+        })
+      : null;
+
     await this.prisma.milestone.update({
       where: { id: milestone.id },
-      data: { status: 'SUBMITTED', proofURI },
+      data: { status: 'SUBMITTED', proofURI, contributionId: contribution?.id ?? null },
     });
+
+    if (contribution) {
+      this.logger.log(`Milestone ${milestone.id} proof verified against contribution ${contribution.id}`);
+    } else {
+      this.logger.warn(`Milestone ${milestone.id} proof "${proofURI}" did not match a verified contribution`);
+    }
   }
 
-  private async onMilestoneApproved(log: any) {
-    const { projectId, milestoneIndex } = log.args;
+  private async onMilestoneApproved(event: RawEvent) {
+    const { projectId, milestoneIndex } = event.args as { projectId: bigint; milestoneIndex: bigint };
     const milestone = await this.findMilestone(projectId, Number(milestoneIndex));
     if (!milestone) return;
     await this.prisma.milestone.update({ where: { id: milestone.id }, data: { status: 'APPROVED' } });
   }
 
-  private async onPaymentReleased(log: any) {
-    const { projectId, milestoneIndex, developer, amount } = log.args;
+  private async onPaymentReleased(event: RawEvent) {
+    const { projectId, milestoneIndex, developer, amount } = event.args as {
+      projectId: bigint;
+      milestoneIndex: bigint;
+      developer: string;
+      amount: bigint;
+    };
     const milestone = await this.findMilestone(projectId, Number(milestoneIndex));
     if (!milestone) return;
 
@@ -227,16 +339,16 @@ export class ChainListenerService implements OnModuleInit {
         milestoneId: milestone.id,
         developerId: developerUser.id,
         amount: baseUnitsToDecimalString(amount),
-        txHash: log.transactionHash,
-        blockNumber: log.blockNumber,
+        txHash: event.transactionHash,
+        blockNumber: event.blockNumber,
       },
     });
 
     this.logger.log(`PaymentReleased: milestone ${milestone.id} -> ${developer}`);
   }
 
-  private async onRefundIssued(log: any) {
-    const { projectId, milestoneIndex } = log.args;
+  private async onRefundIssued(event: RawEvent) {
+    const { projectId, milestoneIndex } = event.args as { projectId: bigint; milestoneIndex: bigint };
     const milestone = await this.findMilestone(projectId, Number(milestoneIndex));
     if (!milestone) return;
     await this.prisma.milestone.update({ where: { id: milestone.id }, data: { status: 'REFUNDED' } });

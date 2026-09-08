@@ -14,10 +14,19 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const { address } = useConnection();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<string | null>(null);
-  const [proofURI, setProofURI] = useState('');
+  // Keyed by milestone id — the selected proof contribution's URL for that milestone's
+  // (not-yet-submitted) submission form.
+  const [proofSelection, setProofSelection] = useState<Record<string, string>>({});
 
   const projectQuery = useQuery({ queryKey: ['project', id], queryFn: () => api.getProject(id) });
   const project = projectQuery.data;
+
+  const isDeveloper = address?.toLowerCase() === project?.developer.walletAddress;
+  const verifiableQuery = useQuery({
+    queryKey: ['verifiable-contributions', project?.developer.id],
+    queryFn: () => api.getVerifiableContributions(project!.developer.id),
+    enabled: !!project && isDeveloper,
+  });
 
   const { mutateAsync: writeContract } = useWriteContract();
 
@@ -67,6 +76,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const submitMutation = useMutation({
     mutationFn: async (m: Milestone) => {
       if (!project) return;
+      const proofURI = proofSelection[m.id];
+      if (!proofURI) throw new Error('Select a verified contribution as proof first');
       setStatus('Submitting milestone…');
       await writeContract({
         address: ESCROW_ADDRESS,
@@ -101,7 +112,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const lowerAddress = address?.toLowerCase();
   const isClient = lowerAddress === project.client.walletAddress;
-  const isDeveloper = lowerAddress === project.developer.walletAddress;
+  const verifiableContributions = verifiableQuery.data ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -141,7 +152,26 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               <span className="glass-strong rounded-full px-2 py-1 text-xs">{m.status}</span>
             </div>
             <p className="text-sm text-white/60">${m.amount} USDC</p>
-            {m.proofURI && <p className="mt-1 text-xs text-white/40">Proof: {m.proofURI}</p>}
+
+            {m.proofURI &&
+              (m.contribution ? (
+                <a
+                  href={m.contribution.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 flex items-center gap-1.5 text-xs text-emerald-300/90 hover:underline"
+                >
+                  <span>✓ Verified —</span>
+                  <span className="font-mono">
+                    {m.contribution.repository}#{m.contribution.prNumber}
+                  </span>
+                </a>
+              ) : (
+                <p className="mt-1 flex items-center gap-1.5 text-xs text-amber-300/80">
+                  <span>⚠ Unverified proof —</span>
+                  <span className="font-mono">{m.proofURI}</span>
+                </p>
+              ))}
             {m.payment && (
               <p className="mt-1 text-xs text-emerald-300/80">Paid — tx {m.payment.txHash.slice(0, 10)}…</p>
             )}
@@ -158,19 +188,39 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               )}
               {isDeveloper && m.status === 'FUNDED' && (
                 <div className="flex flex-1 gap-2">
-                  <input
-                    placeholder="Proof URI (link or description)"
-                    value={proofURI}
-                    onChange={(e) => setProofURI(e.target.value)}
-                    className="glass-strong flex-1 rounded-lg px-2 py-1 text-sm placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-accent"
-                  />
-                  <button
-                    onClick={() => submitMutation.mutate(m)}
-                    disabled={submitMutation.isPending}
-                    className="rounded-full bg-linear-to-r from-accent to-accent-2 px-3 py-1.5 text-sm font-medium text-black transition hover:opacity-90 disabled:opacity-50"
-                  >
-                    Submit
-                  </button>
+                  {verifiableContributions.length === 0 ? (
+                    <p className="text-xs text-white/40">
+                      No verified merged contributions yet — sync GitHub on your{' '}
+                      <a href="/passport" className="underline hover:text-white">
+                        passport
+                      </a>{' '}
+                      first.
+                    </p>
+                  ) : (
+                    <>
+                      <select
+                        value={proofSelection[m.id] ?? ''}
+                        onChange={(e) => setProofSelection({ ...proofSelection, [m.id]: e.target.value })}
+                        className="glass-strong flex-1 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                      >
+                        <option value="" disabled>
+                          Select a verified contribution as proof…
+                        </option>
+                        {verifiableContributions.map((c) => (
+                          <option key={c.id} value={c.url}>
+                            {c.repository} #{c.prNumber} — {c.title}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => submitMutation.mutate(m)}
+                        disabled={submitMutation.isPending || !proofSelection[m.id]}
+                        className="rounded-full bg-linear-to-r from-accent to-accent-2 px-3 py-1.5 text-sm font-medium text-black transition hover:opacity-90 disabled:opacity-50"
+                      >
+                        Submit
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
               {isClient && m.status === 'SUBMITTED' && (

@@ -29,7 +29,16 @@ export class ChainService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    const chainId = await this.client.getChainId();
-    this.logger.log(`Connected to chain ${chainId} at ${this.escrowAddress}`);
+    // Purely an informational connectivity check — must never crash the whole process
+    // over a transient RPC blip. ChainListenerService's own network calls are already
+    // guarded the same way (backfill's .catch(), watch's onError callback); this was
+    // the one unguarded call left, and Arc's public RPC is flaky enough that it did
+    // take the process down in practice.
+    try {
+      const chainId = await this.client.getChainId();
+      this.logger.log(`Connected to chain ${chainId} at ${this.escrowAddress}`);
+    } catch (err) {
+      this.logger.error('Chain connectivity check failed; continuing anyway', err as Error);
+    }
   }
 }
