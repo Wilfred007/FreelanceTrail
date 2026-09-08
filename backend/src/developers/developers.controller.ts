@@ -1,6 +1,8 @@
-import { Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UsePipes } from '@nestjs/common';
 import { DevelopersService } from './developers.service';
 import { ReputationAnalystService } from '../ai/reputation-analyst.service';
+import { connectSchema, type ConnectDto } from './dto/connect.dto';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 @Controller('developers')
 export class DevelopersController {
@@ -8,6 +10,12 @@ export class DevelopersController {
     private readonly developersService: DevelopersService,
     private readonly reputationAnalyst: ReputationAnalystService,
   ) {}
+
+  @Post('connect')
+  @UsePipes(new ZodValidationPipe(connectSchema))
+  connect(@Body() dto: ConnectDto) {
+    return this.developersService.connect(dto.walletAddress);
+  }
 
   @Get(':id/passport')
   getPassport(@Param('id') id: string) {

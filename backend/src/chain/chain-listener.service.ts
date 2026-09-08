@@ -12,13 +12,17 @@ export class ChainListenerService implements OnModuleInit {
     private readonly prisma: PrismaService,
   ) {}
 
-  async onModuleInit() {
-    try {
-      await this.backfill();
-    } catch (err) {
-      this.logger.error('Backfill failed; continuing to live watch only', err as Error);
-    }
+  onModuleInit() {
+    // Start watching for new events immediately rather than waiting on backfill — the
+    // deploy-block-to-now range only grows over time and gets slower/more rate-limited
+    // on every restart, which was delaying live event pickup (a transaction made right
+    // after startup wouldn't be seen until the entire historical replay finished, which
+    // could take minutes). The two run concurrently now; event handlers are all upserts,
+    // so any overlap between backfill's tail and watch's start is harmless.
     this.watch();
+    this.backfill().catch((err) => {
+      this.logger.error('Backfill failed; live watch is still running', err as Error);
+    });
   }
 
   // Arc's public RPC rejects eth_getLogs over a wide block range ("requested range too

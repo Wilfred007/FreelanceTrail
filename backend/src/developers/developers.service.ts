@@ -5,6 +5,17 @@ import { PrismaService } from '../prisma/prisma.service';
 export class DevelopersService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async connect(walletAddress: string) {
+    const wallet = walletAddress.toLowerCase();
+    const user = await this.prisma.user.upsert({
+      where: { walletAddress: wallet },
+      update: {},
+      create: { walletAddress: wallet },
+      select: { id: true, walletAddress: true, githubUsername: true },
+    });
+    return user;
+  }
+
   async getPassport(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },

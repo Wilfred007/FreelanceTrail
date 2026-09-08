@@ -13,9 +13,12 @@ export class GithubController {
   }
 
   @Get('callback')
-  callback(@Query('code') code: string, @Query('state') state: string) {
+  @Redirect()
+  async callback(@Query('code') code: string, @Query('state') state: string) {
     if (!code || !state) throw new BadRequestException('code and state are required');
-    return this.githubService.handleCallback(code, state);
+    await this.githubService.handleCallback(code, state);
+    const frontendUrl = process.env.FRONTEND_URL ?? 'http://localhost:3000';
+    return { url: `${frontendUrl}/passport`, statusCode: 302 };
   }
 
   @Get('contributions')

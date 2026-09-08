@@ -62,7 +62,12 @@ export class ProjectsService {
 
   async findAll() {
     return this.prisma.project.findMany({
-      include: { milestones: { orderBy: { index: 'asc' } } },
+      include: {
+        // Only public-safe fields — never the full User row (it carries githubAccessToken).
+        client: { select: { id: true, walletAddress: true, githubUsername: true } },
+        developer: { select: { id: true, walletAddress: true, githubUsername: true } },
+        milestones: { orderBy: { index: 'asc' } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -71,8 +76,9 @@ export class ProjectsService {
     const project = await this.prisma.project.findUnique({
       where: { id },
       include: {
-        client: true,
-        developer: true,
+        // Only public-safe fields — never the full User row (it carries githubAccessToken).
+        client: { select: { id: true, walletAddress: true, githubUsername: true } },
+        developer: { select: { id: true, walletAddress: true, githubUsername: true } },
         milestones: {
           orderBy: { index: 'asc' },
           include: { payment: true },
