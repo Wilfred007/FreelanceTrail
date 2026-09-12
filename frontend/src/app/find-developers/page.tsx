@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useMutation } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api, type MatchResult } from '@/lib/api';
 
 export default function FindDevelopersPage() {
@@ -10,7 +11,11 @@ export default function FindDevelopersPage() {
   const [results, setResults] = useState<MatchResult[] | null>(null);
 
   const matchMutation = useMutation({
-    mutationFn: () => api.match(requirement),
+    mutationFn: () => toast.promise(api.match(requirement), {
+      loading: 'Searching for matching developers…',
+      success: (data) => (data.matches.length ? `Found ${data.matches.length} match(es).` : 'No strong matches found.'),
+      error: (err) => `Failed: ${(err as Error).message}`,
+    }).unwrap(),
     onSuccess: (data) => setResults(data.matches),
   });
 
@@ -40,9 +45,6 @@ export default function FindDevelopersPage() {
         >
           {matchMutation.isPending ? 'Searching…' : 'Search'}
         </button>
-        {matchMutation.isError && (
-          <p className="text-sm text-red-400">{(matchMutation.error as Error).message}</p>
-        )}
       </form>
 
       {results && (

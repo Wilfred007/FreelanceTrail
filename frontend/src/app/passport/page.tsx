@@ -2,8 +2,10 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useConnection } from 'wagmi';
+import { toast } from 'sonner';
 import { useUser } from '@/lib/user-context';
 import { api } from '@/lib/api';
+import { formatDate } from '@/lib/format-date';
 
 export default function PassportPage() {
   const { isConnected } = useConnection();
@@ -17,12 +19,22 @@ export default function PassportPage() {
   });
 
   const reputationMutation = useMutation({
-    mutationFn: () => api.generateReputation(user!.id),
+    mutationFn: () =>
+      toast.promise(api.generateReputation(user!.id), {
+        loading: 'Generating reputation insights…',
+        success: 'Reputation insights updated.',
+        error: (err) => `Failed: ${(err as Error).message}`,
+      }).unwrap(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['passport', user?.id] }),
   });
 
   const syncMutation = useMutation({
-    mutationFn: () => api.syncGithubContributions(user!.id),
+    mutationFn: () =>
+      toast.promise(api.syncGithubContributions(user!.id), {
+        loading: 'Syncing GitHub contributions…',
+        success: (data) => `Synced ${data.length} contribution(s).`,
+        error: (err) => `Failed: ${(err as Error).message}`,
+      }).unwrap(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['passport', user?.id] }),
   });
 
@@ -62,13 +74,22 @@ export default function PassportPage() {
           <p className="text-sm text-white/60">
             GitHub connected as <span className="font-medium text-white">@{user.githubUsername}</span>
           </p>
-          <button
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
-            className="glass-strong rounded-full px-3 py-1.5 text-sm transition hover:bg-white/15 disabled:opacity-50"
-          >
-            {syncMutation.isPending ? 'Syncing…' : 'Sync Contributions'}
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={api.githubConnectUrl(user.id)}
+              title="Reconnect if syncing fails with a credentials error — GitHub tokens can be revoked or expire."
+              className="glass-strong rounded-full px-3 py-1.5 text-sm text-white/60 transition hover:bg-white/15 hover:text-white"
+            >
+              Reconnect
+            </a>
+            <button
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              className="glass-strong rounded-full px-3 py-1.5 text-sm transition hover:bg-white/15 disabled:opacity-50"
+            >
+              {syncMutation.isPending ? 'Syncing…' : 'Sync Contributions'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -103,13 +124,16 @@ export default function PassportPage() {
                     <li key={s}>{s}</li>
                   ))}
                 </ul>
-                <button
-                  onClick={() => reputationMutation.mutate()}
-                  disabled={reputationMutation.isPending}
-                  className="mt-4 text-xs text-white/40 underline underline-offset-2 hover:text-white disabled:opacity-50"
-                >
-                  {reputationMutation.isPending ? 'Refreshing…' : 'Refresh'}
-                </button>
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    onClick={() => reputationMutation.mutate()}
+                    disabled={reputationMutation.isPending}
+                    className="text-xs text-white/40 underline underline-offset-2 hover:text-white disabled:opacity-50"
+                  >
+                    {reputationMutation.isPending ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                  <span className="text-xs text-white/30">Generated {formatDate(passport.reputation.generatedAt)}</span>
+                </div>
               </div>
             ) : (
               <button
@@ -152,6 +176,9 @@ export default function PassportPage() {
                     )}
                   </div>
                   <p className="text-sm text-white/40">{c.title}</p>
+                  <p className="mt-1 text-xs text-white/30">
+                    {c.mergedAt ? `Merged ${formatDate(c.mergedAt)}` : `Opened ${formatDate(c.createdAt)}`}
+                  </p>
                   {c.aiSummary ? (
                     <p className="mt-2 text-sm text-white/70">{c.aiSummary}</p>
                   ) : (
