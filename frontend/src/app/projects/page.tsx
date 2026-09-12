@@ -4,10 +4,13 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useConnection, useWriteContract } from 'wagmi';
+import { toast } from 'sonner';
 import { useUser } from '@/lib/user-context';
 import { api } from '@/lib/api';
 import { freelanceEscrowAbi } from '@/lib/freelance-escrow.abi';
 import { ESCROW_ADDRESS } from '@/lib/contracts';
+import { pollUntil } from '@/lib/poll-until';
+import { formatDate } from '@/lib/format-date';
 
 interface MilestoneInput {
   description: string;
@@ -23,7 +26,6 @@ export default function ProjectsPage() {
   const [description, setDescription] = useState('');
   const [developerWallet, setDeveloperWallet] = useState('');
   const [milestones, setMilestones] = useState<MilestoneInput[]>([{ description: '', amount: '' }]);
-  const [status, setStatus] = useState<string | null>(null);
 
   // Pre-fill from ?developer=0x... (set by the Find Developers page) without pulling in
   // next/navigation's useSearchParams, which requires a Suspense boundary at build time.
@@ -42,37 +44,56 @@ export default function ProjectsPage() {
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error('Connect your wallet first');
-      setStatus('Creating project record…');
-      const { onchainCall } = await api.createProject({
-        clientWallet: user.walletAddress,
-        developerWallet,
-        title,
-        description: description || undefined,
-        milestones: milestones.map((m) => ({ description: m.description || undefined, amount: m.amount })),
-      });
+      const toastId = toast.loading('Creating project record…');
 
-      setStatus('Confirm the transaction in your wallet…');
-      await writeContract({
-        address: ESCROW_ADDRESS,
-        abi: freelanceEscrowAbi,
-        functionName: 'createProject',
-        args: [
-          onchainCall.developer as `0x${string}`,
-          onchainCall.metadataURI,
-          onchainCall.milestoneAmounts.map((a) => BigInt(a)),
-        ],
-      });
+      try {
+        const { project: draft, onchainCall } = await api.createProject({
+          clientWallet: user.walletAddress,
+          developerWallet,
+          title,
+          description: description || undefined,
+          milestones: milestones.map((m) => ({ description: m.description || undefined, amount: m.amount })),
+        });
 
-      setStatus('Waiting for the backend to pick up the on-chain event (up to ~20s)…');
-      await queryClient.invalidateQueries({ queryKey: ['projects'] });
+        toast.loading('Confirm the transaction in your wallet…', { id: toastId });
+        await writeContract({
+          address: ESCROW_ADDRESS,
+          abi: freelanceEscrowAbi,
+          functionName: 'createProject',
+          args: [
+            onchainCall.developer as `0x${string}`,
+            onchainCall.metadataURI,
+            onchainCall.milestoneAmounts.map((a) => BigInt(a)),
+          ],
+        });
+
+        toast.loading('Waiting for the network to confirm and sync…', { id: toastId });
+        const { value: confirmed, timedOut } = await pollUntil(
+          () => api.getProject(draft.id),
+          (p) => p.status === 'ONCHAIN',
+        );
+
+        queryClient.setQueryData(['project', draft.id], confirmed);
+        await queryClient.invalidateQueries({ queryKey: ['projects'] });
+
+        if (timedOut) {
+          toast.warning('Transaction confirmed, but sync is taking longer than usual — it will appear shortly.', {
+            id: toastId,
+          });
+        } else {
+          toast.success('Project created on-chain.', { id: toastId });
+        }
+        return confirmed;
+      } catch (err) {
+        toast.error(`Failed: ${(err as Error).message}`, { id: toastId });
+        throw err;
+      }
     },
     onSuccess: () => {
-      setStatus('Project created on-chain.');
       setTitle('');
       setDescription('');
       setMilestones([{ description: '', amount: '' }]);
     },
-    onError: (err) => setStatus(`Failed: ${(err as Error).message}`),
   });
 
   const myProjects = (projectsQuery.data ?? []).filter(
@@ -177,7 +198,6 @@ export default function ProjectsPage() {
           >
             {createMutation.isPending ? 'Working…' : 'Create Project'}
           </button>
-          {status && <p className="text-sm text-white/50">{status}</p>}
         </form>
       </section>
 
@@ -198,6 +218,7 @@ export default function ProjectsPage() {
               <p className="text-xs text-white/40">
                 Client {p.client.walletAddress.slice(0, 6)}… → Developer {p.developer.walletAddress.slice(0, 6)}…
               </p>
+              <p className="mt-1 text-xs text-white/30">Created {formatDate(p.createdAt)}</p>
             </Link>
           ))}
         </div>

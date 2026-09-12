@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useConnection, useConnect, useConnectors, useDisconnect } from 'wagmi';
 import { arcTestnet } from '@/lib/chain';
+import { Logo } from '@/components/logo';
 
 function short(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -17,7 +18,8 @@ export function Nav() {
   return (
     <header className="glass sticky top-0 z-20 border-x-0 border-t-0">
       <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
-        <Link href="/" className="glow-text text-lg font-semibold tracking-tight">
+        <Link href="/" className="flex items-center gap-2 text-lg font-semibold tracking-tight text-white">
+          <Logo size={32} />
           FreelanceTrail
         </Link>
         <nav className="flex items-center gap-5 text-sm">
